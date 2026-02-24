@@ -1,0 +1,185 @@
+---
+title: "Surf Forecast Dashboard"
+output:
+  flexdashboard::flex_dashboard:
+    orientation: rows
+    vertical_layout: fill
+    theme: cosmo 
+    self_contained: true
+runtime: shiny
+---
+
+```{r, include=FALSE}
+system("python run_scrap.py  
+https://www.surf-report.com/meteo-surf/lacanau-s1043.html ")
+```
+
+## Importer le dataset généré
+
+```{r load_data, echo=FALSE}
+library(flexdashboard)
+library(dplyr)
+library(tidyr)
+library(readr)
+library(ggplot2)
+library(stringr)
+library(lubridate)
+library(DT)
+```
+
+```{r, include=FALSE}
+# Import CSV
+surf_data <- read_csv("carcans_surf_data.csv")
+View(surf_data)
+```
+
+```{r}
+# Nettoyage et préparation
+surf_data <- surf_data %>%
+  separate(waves_size, into = c("waves_min", "waves_max"), sep = "-", convert = TRUE) %>%
+   # Convert wind speed to numeric
+  mutate(
+    wind_speed = as.numeric(wind_speed),
+    
+    # Create wave mean
+    wave_mean = (waves_min + waves_max) / 2,
+    
+    # Clean date format if needed
+    date = as.Date(date, format = "%A %d %B"),
+    
+    # Order hour properly
+    hour = factor(hour, levels = unique(hour))
+  )
+```
+
+```{r}
+best_moment <- surf_data %>%
+  filter(
+    wave_mean <= 3.0,
+    wind_speed <= 40,
+    str_detect(wind_direction, "Nord")
+  ) %>%
+  arrange(date, hour) %>%
+  slice(1)
+best_text <- if(nrow(best_moment) == 0) {
+  "No optimal moment found"
+} else {
+  paste(best_moment$date, "@", best_moment$hour)
+}
+```
+
+```{r}
+# --- Dans la partie de préparation des données ---
+
+# 1. Identifier le meilleur jour
+best_date <- best_moment$date[1] 
+
+# 2. Créer un jeu de données spécifique pour ce jour
+surf_data_day <- surf_data %>%
+  filter(date == best_date)
+```
+
+```{r, include=FALSE}
+max_wave <- max(surf_data$wave_mean, na.rm = TRUE)
+max_wave
+```
+
+```{r}
+surf_avg_wave <- surf_data %>%
+  group_by(hour) %>%
+  summarise(waves_mean = mean(wave_mean, na.rm = TRUE))
+```
+
+```{r}
+sea_quality <- if(nrow(best_moment) == 0) {
+  0
+} else {
+  score <- 0
+  
+  if(best_moment$wave_mean <= 3.0) score <- score + 50
+  if(best_moment$wind_speed <= 30) score <- score + 30
+  if(str_detect(best_moment$wind_direction, "Nord")) score <- score + 20
+  
+  score
+}
+
+```
+
+### Row {data-height="200"}
+
+```{r}
+# Utilisation d'un bloc personnalisé pour imiter le style vert du screenshot
+valueBox(
+  value = paste(best_moment$date, "@", best_moment$hour),
+  caption = "Best moment to practice surf",
+  icon = "fa-star",
+  color = "#3498DB" # Couleur MediumAquamarine
+)
+
+
+```
+
+### Grade of the sea quality
+
+```{r}
+
+
+gauge(
+  sea_quality, 
+  min = 0, 
+  max = 100, 
+  symbol = '%',
+  gaugeSectors(danger = c(0, 39), warning = c(40, 79), success = c(80, 100), colors = c("#e84c3d", "#f1c40f", "#2ecc71"))
+)
+```
+
+### Highest forecasted wave
+
+```{r}
+# --- Dans la section Row {data-height=200} ---
+valueBox(
+  value = paste0(round(max(surf_data_day$wave_mean), 1), " m"),
+  caption = paste("Max wave on", best_date),
+  icon = "fa-arrows-alt-v",
+  color = "#5dade2"
+)
+```
+
+## Row {data-height="500"}
+
+### Wave size
+
+```{r,height=6}
+# --- Dans la section Row {data-height=400} ---
+ggplot(surf_data_day, aes(x = hour, y = wave_mean, group = 1)) +                
+  geom_area(fill = "#2980b9", alpha = 0.3) +
+  geom_line(color = "#2980b9", size = 1) +                
+  theme_minimal() +                
+  labs(title = paste("Wave size on", best_date), x = "Time", y = "Wave mean (m)") +                
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+### Wind speed
+
+```{r}
+ggplot(surf_data_day, aes(x = hour, y = wind_speed)) +
+  geom_col(fill = "#aed6f1") +
+  theme_minimal() +
+  labs(title = paste("Wind speed on", best_date), x = "Time", y = "Speed (km/h)") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+## Row {data-height="400"}
+
+### Summarise table
+
+```{r}
+surf_table <- surf_data_day %>%
+  select(date, hour, waves_min, waves_max, wind_direction)
+
+datatable(
+  surf_table,
+  options = list(pageLength = 8),
+  rownames = FALSE
+)
+```
